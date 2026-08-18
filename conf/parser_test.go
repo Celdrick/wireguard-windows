@@ -17,23 +17,23 @@ const testInput = `
 [Interface] 
 Address = 10.192.122.1/24 
 Address = 10.10.0.1/16 
-PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk= 
+PrivateKey = 892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec 
 ListenPort = 51820  #comments don't matter
 
 [Peer] 
-PublicKey   =   xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=    
+PublicKey   =   04eb9a6bb11fb690d54bcb9fc45572e2ef331e42e5d59463001055b41de12f7591a953443811a846d416f1e2e1db7d3a1ff62c45a1a00db779103c20af62a794ac    
 Endpoint = 192.95.5.67:1234 
 AllowedIPs = 10.192.122.3/32, 10.192.124.1/24
 
 [Peer] 
-PublicKey = TrMvSoP4jYQlY6RIzBgbssQqY3vxI2Pi+y71lOWWXX0= 
+PublicKey = 0446f2cef1fd4c06b275786abd492d9b829945ff8b59e3bf7f902304eaac239c2c4f5338b317fdf057784a72de8c1d3f1545f43d63fb94c22ad466bb2dca3ddb18 
 Endpoint = [2607:5300:60:6b0::c05f:543]:2468 
 AllowedIPs = 10.192.122.4/32, 192.168.0.0/16
 PersistentKeepalive = 100
 
 [Peer] 
-PublicKey = gN65BkIKy1eCE9pP1wdc8ROUtkHLF2PfAqYdyYBz6EA= 
-PresharedKey = TrMvSoP4jYQlY6RIzBgbssQqY3vxI2Pi+y71lOWWXX0= 
+PublicKey = 04bbb94a4a6ef9590f81de6747cbd658d19af84b72f291f216e650a3eca9c64858cf2419d2b7f7738e45f55f6c46564fbb9603c4c7110e0b3e53fbd1ce28ca679a 
+PresharedKey = 9217dc6acba5816ba8871d67ff6684f3245f7dbb622c1a819f2a416384cb7368 
 Endpoint = test.wireguard.com:18981 
 AllowedIPs = 10.10.10.230/32`
 
@@ -77,29 +77,67 @@ func contains(t *testing.T, list, element any) bool {
 	return false
 }
 
+func TestSM2PublicKey(t *testing.T) {
+	k, err := parsePrivateKeyHex("892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec")
+	if !noError(t, err) {
+		return
+	}
+	equal(t, "048ad9242e3cf86181d5193864ffcbb08018c6b1887dcbcf7496ee08fcb2ecb7ab801e1368e946e9afd84afcd81f90559a7b64dc04fba0cba4a55fbb49bdb40393", k.Public().String())
+}
+
+func TestToUAPI(t *testing.T) {
+	c, err := FromWgQuick(testInput, "test")
+	if !noError(t, err) {
+		return
+	}
+	uapi := c.ToUAPI()
+	if !strings.Contains(uapi, "private_key=892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec") {
+		t.Fatalf("ToUAPI missing private_key:\n%s", uapi)
+	}
+	if !strings.Contains(uapi, "public_key=04eb9a6bb11fb690d54bcb9fc45572e2ef331e42e5d59463001055b41de12f7591a953443811a846d416f1e2e1db7d3a1ff62c45a1a00db779103c20af62a794ac") {
+		t.Fatalf("ToUAPI missing public_key:\n%s", uapi)
+	}
+	if !strings.Contains(uapi, "preshared_key=9217dc6acba5816ba8871d67ff6684f3245f7dbb622c1a819f2a416384cb7368") {
+		t.Fatalf("ToUAPI missing preshared_key:\n%s", uapi)
+	}
+	if !strings.Contains(uapi, "replace_peers=true") || !strings.Contains(uapi, "allowed_ip=10.192.122.3/32") {
+		t.Fatalf("ToUAPI missing peer fields:\n%s", uapi)
+	}
+	got, err := FromUAPI(uapi, c)
+	if !noError(t, err) {
+		return
+	}
+	equal(t, c.Interface.PrivateKey, got.Interface.PrivateKey)
+	equal(t, c.Interface.ListenPort, got.Interface.ListenPort)
+	lenTest(t, got.Peers, 3)
+	equal(t, c.Peers[0].PublicKey, got.Peers[0].PublicKey)
+	equal(t, c.Peers[2].PresharedKey, got.Peers[2].PresharedKey)
+	equal(t, c.Interface.Addresses, got.Interface.Addresses)
+}
+
 func TestFromWgQuick(t *testing.T) {
 	conf, err := FromWgQuick(testInput, "test")
 	if noError(t, err) {
 		lenTest(t, conf.Interface.Addresses, 2)
 		contains(t, conf.Interface.Addresses, netip.PrefixFrom(netip.AddrFrom4([4]byte{10, 10, 0, 1}), 16))
 		contains(t, conf.Interface.Addresses, netip.PrefixFrom(netip.AddrFrom4([4]byte{10, 192, 122, 1}), 24))
-		equal(t, "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=", conf.Interface.PrivateKey.String())
+		equal(t, "892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec", conf.Interface.PrivateKey.String())
 		equal(t, uint16(51820), conf.Interface.ListenPort)
 
 		lenTest(t, conf.Peers, 3)
 		lenTest(t, conf.Peers[0].AllowedIPs, 2)
 		equal(t, Endpoint{Host: "192.95.5.67", Port: 1234}, conf.Peers[0].Endpoint)
-		equal(t, "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=", conf.Peers[0].PublicKey.String())
+		equal(t, "04eb9a6bb11fb690d54bcb9fc45572e2ef331e42e5d59463001055b41de12f7591a953443811a846d416f1e2e1db7d3a1ff62c45a1a00db779103c20af62a794ac", conf.Peers[0].PublicKey.String())
 
 		lenTest(t, conf.Peers[1].AllowedIPs, 2)
 		equal(t, Endpoint{Host: "2607:5300:60:6b0::c05f:543", Port: 2468}, conf.Peers[1].Endpoint)
-		equal(t, "TrMvSoP4jYQlY6RIzBgbssQqY3vxI2Pi+y71lOWWXX0=", conf.Peers[1].PublicKey.String())
+		equal(t, "0446f2cef1fd4c06b275786abd492d9b829945ff8b59e3bf7f902304eaac239c2c4f5338b317fdf057784a72de8c1d3f1545f43d63fb94c22ad466bb2dca3ddb18", conf.Peers[1].PublicKey.String())
 		equal(t, uint16(100), conf.Peers[1].PersistentKeepalive)
 
 		lenTest(t, conf.Peers[2].AllowedIPs, 1)
 		equal(t, Endpoint{Host: "test.wireguard.com", Port: 18981}, conf.Peers[2].Endpoint)
-		equal(t, "gN65BkIKy1eCE9pP1wdc8ROUtkHLF2PfAqYdyYBz6EA=", conf.Peers[2].PublicKey.String())
-		equal(t, "TrMvSoP4jYQlY6RIzBgbssQqY3vxI2Pi+y71lOWWXX0=", conf.Peers[2].PresharedKey.String())
+		equal(t, "04bbb94a4a6ef9590f81de6747cbd658d19af84b72f291f216e650a3eca9c64858cf2419d2b7f7738e45f55f6c46564fbb9603c4c7110e0b3e53fbd1ce28ca679a", conf.Peers[2].PublicKey.String())
+		equal(t, "9217dc6acba5816ba8871d67ff6684f3245f7dbb622c1a819f2a416384cb7368", conf.Peers[2].PresharedKey.String())
 	}
 }
 
@@ -108,14 +146,14 @@ func TestComments(t *testing.T) {
 # second line
 
 [Interface] # the interface
-PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+PrivateKey = 892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec
 # which port
 ListenPort = 51820 # inline port
 Address = 10.0.0.1/24
 
 # the only peer
 [Peer]
-PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+PublicKey = 04eb9a6bb11fb690d54bcb9fc45572e2ef331e42e5d59463001055b41de12f7591a953443811a846d416f1e2e1db7d3a1ff62c45a1a00db779103c20af62a794ac
 AllowedIPs = 0.0.0.0/0 # everything
 # trailing note
 `
@@ -132,7 +170,7 @@ AllowedIPs = 0.0.0.0/0 # everything
 	equal(t, "# everything", c.Peers[0].Comments.Lines["allowedips"].Suffix)
 	equal(t, []string{"# trailing note"}, c.TrailingComments)
 
-	c2, err := FromWgQuick("[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nPostUp = echo '#1 done'\n", "test")
+	c2, err := FromWgQuick("[Interface]\nPrivateKey = 892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec\nPostUp = echo '#1 done'\n", "test")
 	if noError(t, err) {
 		equal(t, "echo '#1 done'", c2.Interface.PostUp)
 		equal(t, "", c2.Interface.Comments.Lines["postup"].Suffix)
@@ -163,7 +201,7 @@ func TestCommentBlankLines(t *testing.T) {
 
 # Header line two
 [Interface]
-PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+PrivateKey = 892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec
 
 # blank line precedes this comment
 ListenPort = 51820
@@ -172,7 +210,7 @@ Address = 10.0.0.1/24
 
 # multiple blank lines above collapse to one
 [Peer]
-PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+PublicKey = 04eb9a6bb11fb690d54bcb9fc45572e2ef331e42e5d59463001055b41de12f7591a953443811a846d416f1e2e1db7d3a1ff62c45a1a00db779103c20af62a794ac
 AllowedIPs = 0.0.0.0/0
 `
 	c, err := FromWgQuick(input, "test")
@@ -207,7 +245,7 @@ AllowedIPs = 0.0.0.0/0
 
 func TestCommentRepeatedKey(t *testing.T) {
 	const input = `[Interface]
-PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+PrivateKey = 892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec
 # a
 
 Address = 10.0.0.1/24 # home
@@ -228,7 +266,7 @@ Address = 10.0.0.2/24 # work
 		t.Errorf("merged repeated-key comments wrong in:\n%s", serialized)
 	}
 
-	c2, err := FromWgQuick("# one\n[Interface] # h1\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\n# two\n[Interface] # h2\nListenPort = 51820\n", "test")
+	c2, err := FromWgQuick("# one\n[Interface] # h1\nPrivateKey = 892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec\n# two\n[Interface] # h2\nListenPort = 51820\n", "test")
 	if noError(t, err) {
 		equal(t, []string{"# one", "# two"}, c2.Interface.Comments.Header.Before)
 		equal(t, "# h1 # h2", c2.Interface.Comments.Header.Suffix)
@@ -237,10 +275,10 @@ Address = 10.0.0.2/24 # work
 
 func TestCommentDefaultValuedKeys(t *testing.T) {
 	for _, input := range []string{
-		"[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\n# note\nListenPort = 0 # inline\n",
-		"[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\n# note\nTable = auto # inline\n",
-		"[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\n[Peer]\nPublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\nAllowedIPs = 0.0.0.0/0\n# note\nPersistentKeepalive = off # inline\n",
-		"[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\n[Peer]\nPublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\nAllowedIPs = 0.0.0.0/0\n# note\nPresharedKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n",
+		"[Interface]\nPrivateKey = 892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec\n# note\nListenPort = 0 # inline\n",
+		"[Interface]\nPrivateKey = 892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec\n# note\nTable = auto # inline\n",
+		"[Interface]\nPrivateKey = 892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec\n[Peer]\nPublicKey = 04eb9a6bb11fb690d54bcb9fc45572e2ef331e42e5d59463001055b41de12f7591a953443811a846d416f1e2e1db7d3a1ff62c45a1a00db779103c20af62a794ac\nAllowedIPs = 0.0.0.0/0\n# note\nPersistentKeepalive = off # inline\n",
+		"[Interface]\nPrivateKey = 892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec\n[Peer]\nPublicKey = 04eb9a6bb11fb690d54bcb9fc45572e2ef331e42e5d59463001055b41de12f7591a953443811a846d416f1e2e1db7d3a1ff62c45a1a00db779103c20af62a794ac\nAllowedIPs = 0.0.0.0/0\n# note\nPresharedKey = 0000000000000000000000000000000000000000000000000000000000000000\n",
 	} {
 		c, err := FromWgQuick(input, "test")
 		if !noError(t, err) {
@@ -258,8 +296,8 @@ func TestCommentDefaultValuedKeys(t *testing.T) {
 }
 
 func TestRedactClearsComments(t *testing.T) {
-	input := "[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk= # backup SECRET\n" +
-		"# note SECRET\n[Peer]\nPublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\nAllowedIPs = 0.0.0.0/0\n# trailing SECRET\n"
+	input := "[Interface]\nPrivateKey = 892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec # backup SECRET\n" +
+		"# note SECRET\n[Peer]\nPublicKey = 04eb9a6bb11fb690d54bcb9fc45572e2ef331e42e5d59463001055b41de12f7591a953443811a846d416f1e2e1db7d3a1ff62c45a1a00db779103c20af62a794ac\nAllowedIPs = 0.0.0.0/0\n# trailing SECRET\n"
 	c, err := FromWgQuick(input, "test")
 	if !noError(t, err) {
 		return
@@ -273,15 +311,15 @@ func TestRedactClearsComments(t *testing.T) {
 func FuzzRoundTrip(f *testing.F) {
 	f.Add(testInput)
 	f.Add("# top of file\n# second line\n\n[Interface] # the interface\n" +
-		"PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\n# which port\n" +
+		"PrivateKey = 892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec\n# which port\n" +
 		"ListenPort = 51820 # inline port\nAddress = 10.0.0.1/24\n\n# the only peer\n[Peer]\n" +
-		"PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\nAllowedIPs = 0.0.0.0/0 # everything\n# trailing note\n")
-	f.Add("[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\n# a\n\n" +
+		"PublicKey = 04eb9a6bb11fb690d54bcb9fc45572e2ef331e42e5d59463001055b41de12f7591a953443811a846d416f1e2e1db7d3a1ff62c45a1a00db779103c20af62a794ac\nAllowedIPs = 0.0.0.0/0 # everything\n# trailing note\n")
+	f.Add("[Interface]\nPrivateKey = 892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec\n# a\n\n" +
 		"Address = 10.0.0.1/24 # home\n\n# b\nAddress = 10.0.0.2/24 # work\n")
-	f.Add("[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\n# p\nListenPort = 0 # x\n" +
-		"# t\nTable = auto # y\n[Peer]\nPublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\n" +
+	f.Add("[Interface]\nPrivateKey = 892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec\n# p\nListenPort = 0 # x\n" +
+		"# t\nTable = auto # y\n[Peer]\nPublicKey = 04eb9a6bb11fb690d54bcb9fc45572e2ef331e42e5d59463001055b41de12f7591a953443811a846d416f1e2e1db7d3a1ff62c45a1a00db779103c20af62a794ac\n" +
 		"AllowedIPs = 0.0.0.0/0\n# k\nPersistentKeepalive = off # z\n")
-	f.Add("[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nDNS = 1.1.1.1, home.arpa\nMTU = 1280\n" +
+	f.Add("[Interface]\nPrivateKey = 892ea5f95725d35993225213e4038b1760c09fcc6bd962ead334674a2b4a9cec\nDNS = 1.1.1.1, home.arpa\nMTU = 1280\n" +
 		"# pre\nPreUp = echo a=b #1\nPostUp = ip route add # x\nPreDown = echo down\nPostDown = echo # done\n")
 
 	f.Fuzz(func(t *testing.T, s string) {

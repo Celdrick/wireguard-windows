@@ -1,13 +1,22 @@
-# [WireGuard](https://www.wireguard.com/) for Windows
+# WireGuard-GM for Windows
 
-This is a fully-featured WireGuard client for Windows that uses [WireGuardNT](https://git.zx2c4.com/wireguard-nt/about/). It is the only official and recommended way of using WireGuard on Windows.
+This is a WireGuard-GM fork of the official Windows client. It uses **userspace**
+`wireguard-go` (SM2 / SM3 / SM4-GCM) plus [Wintun](https://www.wintun.net/), not
+WireGuardNT. It **does not interoperate** with standard WireGuard.
 
-## Download &amp; Install
+Tunnel configs use hex keys: 64-character SM2 private keys, 130-character SM2
+public keys, and optional 64-character PSKs. Place `wintun.dll` next to
+`wireguard.exe`. Sibling checkouts of `../wireguard-go` and `../gmsm` are
+required to build.
 
-If you've come here looking to simply run WireGuard for Windows, [the main download page has links](https://www.wireguard.com/install/). There you will find two things:
+## Build
 
-- [The WireGuard Installer](https://download.wireguard.com/windows-client/wireguard-installer.exe) &ndash; This selects the most recent version for your architecture, downloads it, checks signatures and hashes, and installs it.
-- [Standalone MSIs](https://download.wireguard.com/windows-client/) &ndash; These are for system admins who wish to deploy the MSIs directly. For most end users, the ordinary installer takes care of downloading these automatically.
+Build from Linux with MinGW, or on Windows with `build.bat`. `make` produces
+`amd64/wireguard.exe` plus `amd64/wintun.dll` (and the x86 / arm64 equivalents).
+See [`docs/buildrun.md`](docs/buildrun.md).
+
+Official WireGuard for Windows installers from wireguard.com are **not** this
+fork and will not speak WireGuard-GM.
 
 ## Documentation
 

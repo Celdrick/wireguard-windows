@@ -14,7 +14,6 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST manifest.xml
 7 ICON ui/icon/wireguard.ico
 8 ICON ui/icon/dot.ico
-wireguard.dll RCDATA wireguard.dll
 
 #define VERSIONINFO_TEMPLATE(block_id, lang_id, codepage_id, file_desc, comments) \
 VS_VERSION_INFO VERSIONINFO \
@@ -34,7 +33,7 @@ BEGIN \
       VALUE "InternalName", "wireguard-windows" \
       VALUE "LegalCopyright", "Copyright © 2015-2026 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved." \
       VALUE "OriginalFilename", "wireguard.exe" \
-      VALUE "ProductName", "WireGuard" \
+      VALUE "ProductName", "WireGuard-GM" \
       VALUE "ProductVersion", EXPAND(WIREGUARD_VERSION_STR) \
       VALUE "Comments", comments \
     END \
@@ -48,7 +47,7 @@ END
 LANGUAGE LANG_ENGLISH, SUBLANG_DEFAULT
 VERSIONINFO_TEMPLATE(
   "040904b0", 0x409, 0x4b0,
-  "WireGuard: Fast, Modern, Secure VPN Tunnel",
+  "WireGuard-GM: Fast, Modern, Secure VPN Tunnel (SM2/SM3/SM4)",
   "https://www.wireguard.com/"
 )
 

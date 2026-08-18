@@ -20,7 +20,6 @@ import (
 	"golang.org/x/sys/windows"
 
 	"golang.zx2c4.com/wireguard/windows/conf"
-	"golang.zx2c4.com/wireguard/windows/driver"
 	"golang.zx2c4.com/wireguard/windows/elevate"
 	"golang.zx2c4.com/wireguard/windows/l18n"
 	"golang.zx2c4.com/wireguard/windows/manager"
@@ -328,10 +327,7 @@ func main() {
 		if len(os.Args) != 2 {
 			usage()
 		}
-		err := driver.Uninstall()
-		if err != nil {
-			fatal(err)
-		}
+		log.Println("WireGuard-GM uses userspace cryptography and Wintun; there is no WireGuardNT driver to remove")
 		return
 	}
 	usage()

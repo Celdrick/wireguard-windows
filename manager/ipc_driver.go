@@ -6,57 +6,51 @@
 package manager
 
 import (
-	"sync"
+	"bytes"
+	"fmt"
+	"io"
+	"time"
 
-	"golang.zx2c4.com/wireguard/windows/driver"
+	"golang.zx2c4.com/wireguard/ipc/namedpipe"
 )
 
-type lockedDriverAdapter struct {
-	*driver.Adapter
-	sync.Mutex
+func uapiPath(tunnelName string) string {
+	return `\\.\pipe\ProtectedPrefix\Administrators\WireGuard\` + tunnelName
 }
 
-var (
-	driverAdapters     = make(map[string]*lockedDriverAdapter)
-	driverAdaptersLock sync.RWMutex
-)
-
-func findDriverAdapter(tunnelName string) (*lockedDriverAdapter, error) {
-	driverAdaptersLock.RLock()
-	driverAdapter, ok := driverAdapters[tunnelName]
-	if ok {
-		driverAdapter.Lock()
-		driverAdaptersLock.RUnlock()
-		return driverAdapter, nil
-	}
-	driverAdaptersLock.RUnlock()
-	driverAdaptersLock.Lock()
-	defer driverAdaptersLock.Unlock()
-	driverAdapter, ok = driverAdapters[tunnelName]
-	if ok {
-		driverAdapter.Lock()
-		return driverAdapter, nil
-	}
-	driverAdapter = &lockedDriverAdapter{}
-	var err error
-	driverAdapter.Adapter, err = driver.OpenAdapter(tunnelName)
+func uapiGet(tunnelName string) (string, error) {
+	conn, err := namedpipe.DialTimeout(uapiPath(tunnelName), 2*time.Second)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	driverAdapters[tunnelName] = driverAdapter
-	driverAdapter.Lock()
-	return driverAdapter, nil
+	defer conn.Close()
+	if _, err := conn.Write([]byte("get=1\n\n")); err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	tmp := make([]byte, 4096)
+	for {
+		n, err := conn.Read(tmp)
+		if n > 0 {
+			buf.Write(tmp[:n])
+			if bytes.Contains(buf.Bytes(), []byte("\n\n")) || bytes.Contains(buf.Bytes(), []byte("errno=")) {
+				break
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	return buf.String(), nil
 }
 
 func releaseDriverAdapter(tunnelName string) {
-	driverAdaptersLock.Lock()
-	defer driverAdaptersLock.Unlock()
-	driverAdapter, ok := driverAdapters[tunnelName]
-	if !ok {
-		return
-	}
-	driverAdapter.Lock()
-	delete(driverAdapters, tunnelName)
-	driverAdapter.Adapter.Close()
-	driverAdapter.Unlock()
+	// Userspace WireGuard-GM has no kernel adapter handle to release.
+}
+
+func runtimeConfigError(tunnelName string, err error) error {
+	return fmt.Errorf("unable to query runtime configuration for %s: %w", tunnelName, err)
 }

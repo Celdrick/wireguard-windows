@@ -99,20 +99,16 @@ func (s stringSpan) isCaselessSame(c string) bool {
 	return true
 }
 
-func (s stringSpan) isValidKey() bool {
-	if s.len != 44 || *s.at(43) != '=' {
+func (s stringSpan) isValidHexKey(n int) bool {
+	if s.len != n {
 		return false
 	}
-	for i := range 42 {
-		if !isDecimal(*s.at(i)) && !isAlphabet(*s.at(i)) && *s.at(i) != '/' && *s.at(i) != '+' {
+	for i := 0; i < s.len; i++ {
+		if !isHexadecimal(*s.at(i)) {
 			return false
 		}
 	}
-	switch *s.at(42) {
-	case 'A', 'E', 'I', 'M', 'Q', 'U', 'Y', 'c', 'g', 'k', 'o', 's', 'w', '4', '8', '0':
-		return true
-	}
-	return false
+	return true
 }
 
 func (s stringSpan) isValidHostname() bool {
@@ -509,11 +505,11 @@ func (hsa *highlightSpanArray) highlightMultivalue(parent, s stringSpan, section
 func (hsa *highlightSpanArray) highlightValue(parent, s stringSpan, section field) {
 	switch section {
 	case fieldPrivateKey:
-		hsa.append(parent.s, s, validateHighlight(s.isValidKey(), highlightPrivateKey))
+		hsa.append(parent.s, s, validateHighlight(s.isValidHexKey(64), highlightPrivateKey))
 	case fieldPublicKey:
-		hsa.append(parent.s, s, validateHighlight(s.isValidKey(), highlightPublicKey))
+		hsa.append(parent.s, s, validateHighlight(s.isValidHexKey(130), highlightPublicKey))
 	case fieldPresharedKey:
-		hsa.append(parent.s, s, validateHighlight(s.isValidKey(), highlightPresharedKey))
+		hsa.append(parent.s, s, validateHighlight(s.isValidHexKey(64), highlightPresharedKey))
 	case fieldMTU:
 		hsa.append(parent.s, s, validateHighlight(s.isValidMTU(), highlightMTU))
 	case fieldTable:

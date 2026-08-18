@@ -7,12 +7,10 @@ package main
 
 import (
 	"C"
-	"crypto/rand"
 	"log"
 	"path/filepath"
 	"unsafe"
 
-	"golang.org/x/crypto/curve25519"
 	"golang.org/x/sys/windows"
 
 	"golang.zx2c4.com/wireguard/windows/conf"
@@ -33,16 +31,15 @@ func WireGuardTunnelService(confFile16 *uint16) bool {
 
 //export WireGuardGenerateKeypair
 func WireGuardGenerateKeypair(publicKey, privateKey *byte) {
-	publicKeyArray := (*[32]byte)(unsafe.Pointer(publicKey))
-	privateKeyArray := (*[32]byte)(unsafe.Pointer(privateKey))
-	n, err := rand.Read(privateKeyArray[:])
-	if err != nil || n != len(privateKeyArray) {
-		panic("Unable to generate random bytes")
+	sk, err := conf.NewPrivateKey()
+	if err != nil {
+		panic(err)
 	}
-	privateKeyArray[0] &= 248
-	privateKeyArray[31] = (privateKeyArray[31] & 127) | 64
-
-	curve25519.ScalarBaseMult(publicKeyArray, privateKeyArray)
+	pk := sk.Public()
+	privateKeyArray := unsafe.Slice(privateKey, conf.PrivateKeyLength)
+	publicKeyArray := unsafe.Slice(publicKey, conf.PublicKeyLength)
+	copy(privateKeyArray, sk[:])
+	copy(publicKeyArray, pk[:])
 }
 
 func main() {}

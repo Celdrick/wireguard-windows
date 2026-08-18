@@ -52,22 +52,18 @@ func (s *ManagerService) RuntimeConfig(tunnelName string) (*conf.Config, error) 
 	if err != nil {
 		return nil, err
 	}
-	driverAdapter, err := findDriverAdapter(tunnelName)
+	uapi, err := uapiGet(tunnelName)
+	if err != nil {
+		return nil, runtimeConfigError(tunnelName, err)
+	}
+	runtimeConfig, err := conf.FromUAPI(uapi, storedConfig)
 	if err != nil {
 		return nil, err
 	}
-	runtimeConfig, err := driverAdapter.Configuration()
-	if err != nil {
-		driverAdapter.Unlock()
-		releaseDriverAdapter(tunnelName)
-		return nil, err
-	}
-	conf := conf.FromDriverConfiguration(runtimeConfig, storedConfig)
-	driverAdapter.Unlock()
 	if s.elevatedToken == 0 {
-		conf.Redact()
+		runtimeConfig.Redact()
 	}
-	return conf, nil
+	return runtimeConfig, nil
 }
 
 func (s *ManagerService) Start(tunnelName string) error {

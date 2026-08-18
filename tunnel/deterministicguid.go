@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	deterministicGUIDLabel = "Deterministic WireGuard Windows GUID v1 jason@zx2c4.com"
-	fixedGUIDLabel         = "Fixed WireGuard Windows GUID v1 jason@zx2c4.com"
+	deterministicGUIDLabel = "Deterministic WireGuard-GM Windows GUID v1 gm-wg"
+	fixedGUIDLabel         = "Fixed WireGuard-GM Windows GUID v1 gm-wg"
 )
 
 // Escape hatch for external consumers, not us.
@@ -66,20 +66,20 @@ func deterministicGUID(c *conf.Config) *windows.GUID {
 		b2Number(len(bytes))
 		b2.Write(bytes)
 	}
-	b2Key := func(k *conf.Key) {
-		b2.Write(k[:])
+	b2Key := func(k []byte) {
+		b2.Write(k)
 	}
 
 	b2String(c.Name)
 	if !UseFixedGUIDInsteadOfDeterministic {
-		b2Key(c.Interface.PrivateKey.Public())
+		b2Key(c.Interface.PrivateKey.Public()[:])
 		b2Number(len(c.Peers))
 		sortedPeers := slices.Clone(c.Peers)
 		sort.Slice(sortedPeers, func(i, j int) bool {
 			return bytes.Compare(sortedPeers[i].PublicKey[:], sortedPeers[j].PublicKey[:]) < 0
 		})
 		for _, peer := range sortedPeers {
-			b2Key(&peer.PublicKey)
+			b2Key(peer.PublicKey[:])
 			b2Number(len(peer.AllowedIPs))
 			sortedAllowedIPs := slices.Clone(peer.AllowedIPs)
 			sort.Slice(sortedAllowedIPs, func(i, j int) bool {

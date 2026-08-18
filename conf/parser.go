@@ -6,15 +6,14 @@
 package conf
 
 import (
-	"encoding/base64"
+	"encoding/hex"
 	"net/netip"
 	"strconv"
 	"strings"
+	"time"
 
-	"golang.org/x/sys/windows"
 	"golang.org/x/text/encoding/unicode"
 
-	"golang.zx2c4.com/wireguard/windows/driver"
 	"golang.zx2c4.com/wireguard/windows/l18n"
 )
 
@@ -118,15 +117,43 @@ func parseTableOff(s string) (bool, error) {
 	return false, err
 }
 
-func parseKeyBase64(s string) (*Key, error) {
-	k, err := base64.StdEncoding.DecodeString(s)
+func parseHexKey(s string, n int) ([]byte, error) {
+	k, err := hex.DecodeString(strings.TrimSpace(s))
 	if err != nil {
 		return nil, &ParseError{l18n.Sprintf("Invalid key: %v", err), s}
 	}
-	if len(k) != KeyLength {
-		return nil, &ParseError{l18n.Sprintf("Keys must decode to exactly 32 bytes"), s}
+	if len(k) != n {
+		return nil, &ParseError{l18n.Sprintf("Keys must decode to exactly %d bytes", n), s}
 	}
-	var key Key
+	return k, nil
+}
+
+func parsePrivateKeyHex(s string) (*PrivateKey, error) {
+	k, err := parseHexKey(s, PrivateKeyLength)
+	if err != nil {
+		return nil, err
+	}
+	var key PrivateKey
+	copy(key[:], k)
+	return &key, nil
+}
+
+func parsePublicKeyHex(s string) (*PublicKey, error) {
+	k, err := parseHexKey(s, PublicKeyLength)
+	if err != nil {
+		return nil, err
+	}
+	var key PublicKey
+	copy(key[:], k)
+	return &key, nil
+}
+
+func parsePresharedKeyHex(s string) (*PresharedKey, error) {
+	k, err := parseHexKey(s, PresharedKeyLength)
+	if err != nil {
+		return nil, err
+	}
+	var key PresharedKey
 	copy(key[:], k)
 	return &key, nil
 }
@@ -245,7 +272,7 @@ func FromWgQuick(s, name string) (*Config, error) {
 		if parserState == inInterfaceSection {
 			switch key {
 			case "privatekey":
-				k, err := parseKeyBase64(val)
+				k, err := parsePrivateKeyHex(val)
 				if err != nil {
 					return nil, err
 				}
@@ -308,13 +335,13 @@ func FromWgQuick(s, name string) (*Config, error) {
 		} else if parserState == inPeerSection {
 			switch key {
 			case "publickey":
-				k, err := parseKeyBase64(val)
+				k, err := parsePublicKeyHex(val)
 				if err != nil {
 					return nil, err
 				}
 				peer.PublicKey = *k
 			case "presharedkey":
-				k, err := parseKeyBase64(val)
+				k, err := parsePresharedKeyHex(val)
 				if err != nil {
 					return nil, err
 				}
@@ -419,7 +446,7 @@ func FromWgQuickWithUnknownEncoding(s, name string) (*Config, error) {
 	return nil, firstErr
 }
 
-func FromDriverConfiguration(interfaze *driver.Interface, existingConfig *Config) *Config {
+func FromUAPI(uapi string, existingConfig *Config) (*Config, error) {
 	conf := Config{
 		Name: existingConfig.Name,
 		Interface: Interface{
@@ -432,56 +459,122 @@ func FromDriverConfiguration(interfaze *driver.Interface, existingConfig *Config
 			PreDown:   existingConfig.Interface.PreDown,
 			PostDown:  existingConfig.Interface.PostDown,
 			TableOff:  existingConfig.Interface.TableOff,
+			Comments:  existingConfig.Interface.Comments,
 		},
+		TrailingComments: existingConfig.TrailingComments,
 	}
-	if interfaze.Flags&driver.InterfaceHasPrivateKey != 0 {
-		conf.Interface.PrivateKey = interfaze.PrivateKey
+	var peer *Peer
+	maybeAdd := func() {
+		if peer != nil {
+			conf.Peers = append(conf.Peers, *peer)
+			peer = nil
+		}
 	}
-	if interfaze.Flags&driver.InterfaceHasListenPort != 0 {
-		conf.Interface.ListenPort = interfaze.ListenPort
-	}
-	var p *driver.Peer
-	for i := uint32(0); i < interfaze.PeerCount; i++ {
-		if p == nil {
-			p = interfaze.FirstPeer()
-		} else {
-			p = p.NextPeer()
+	for line := range strings.SplitSeq(uapi, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "errno=") {
+			continue
 		}
-		peer := Peer{}
-		if p.Flags&driver.PeerHasPublicKey != 0 {
-			peer.PublicKey = p.PublicKey
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			return nil, &ParseError{l18n.Sprintf("Invalid UAPI line"), line}
 		}
-		if p.Flags&driver.PeerHasPresharedKey != 0 {
-			peer.PresharedKey = p.PresharedKey
-		}
-		if p.Flags&driver.PeerHasEndpoint != 0 {
-			peer.Endpoint.Port = p.Endpoint.Port()
-			peer.Endpoint.Host = p.Endpoint.Addr().String()
-		}
-		if p.Flags&driver.PeerHasPersistentKeepalive != 0 {
-			peer.PersistentKeepalive = p.PersistentKeepalive
-		}
-		peer.TxBytes = Bytes(p.TxBytes)
-		peer.RxBytes = Bytes(p.RxBytes)
-		if p.LastHandshake != 0 {
-			peer.LastHandshakeTime = HandshakeTime((p.LastHandshake - 116444736000000000) * 100)
-		}
-		var a *driver.AllowedIP
-		for j := uint32(0); j < p.AllowedIPsCount; j++ {
-			if a == nil {
-				a = p.FirstAllowedIP()
-			} else {
-				a = a.NextAllowedIP()
+		switch key {
+		case "private_key":
+			k, err := parsePrivateKeyHex(val)
+			if err != nil {
+				return nil, err
 			}
-			var ip netip.Addr
-			if a.AddressFamily == windows.AF_INET {
-				ip = netip.AddrFrom4(*(*[4]byte)(a.Address[:4]))
-			} else if a.AddressFamily == windows.AF_INET6 {
-				ip = netip.AddrFrom16(*(*[16]byte)(a.Address[:16]))
+			conf.Interface.PrivateKey = *k
+		case "listen_port":
+			p, err := parsePort(val)
+			if err != nil {
+				return nil, err
 			}
-			peer.AllowedIPs = append(peer.AllowedIPs, netip.PrefixFrom(ip, int(a.Cidr)))
+			conf.Interface.ListenPort = p
+		case "public_key":
+			maybeAdd()
+			k, err := parsePublicKeyHex(val)
+			if err != nil {
+				return nil, err
+			}
+			peer = &Peer{PublicKey: *k}
+		case "preshared_key":
+			if peer == nil {
+				continue
+			}
+			k, err := parsePresharedKeyHex(val)
+			if err != nil {
+				return nil, err
+			}
+			peer.PresharedKey = *k
+		case "endpoint":
+			if peer == nil {
+				continue
+			}
+			e, err := parseEndpoint(val)
+			if err != nil {
+				return nil, err
+			}
+			peer.Endpoint = *e
+		case "allowed_ip":
+			if peer == nil {
+				continue
+			}
+			a, err := parseIPCidr(val)
+			if err != nil {
+				return nil, err
+			}
+			peer.AllowedIPs = append(peer.AllowedIPs, a)
+		case "persistent_keepalive_interval":
+			if peer == nil {
+				continue
+			}
+			p, err := parsePersistentKeepalive(val)
+			if err != nil {
+				return nil, err
+			}
+			peer.PersistentKeepalive = p
+		case "tx_bytes":
+			if peer == nil {
+				continue
+			}
+			n, err := strconv.ParseUint(val, 10, 64)
+			if err != nil {
+				return nil, &ParseError{l18n.Sprintf("Invalid key: %v", err), val}
+			}
+			peer.TxBytes = Bytes(n)
+		case "rx_bytes":
+			if peer == nil {
+				continue
+			}
+			n, err := strconv.ParseUint(val, 10, 64)
+			if err != nil {
+				return nil, &ParseError{l18n.Sprintf("Invalid key: %v", err), val}
+			}
+			peer.RxBytes = Bytes(n)
+		case "last_handshake_time_sec":
+			if peer == nil {
+				continue
+			}
+			n, err := strconv.ParseInt(val, 10, 64)
+			if err != nil {
+				return nil, &ParseError{l18n.Sprintf("Invalid key: %v", err), val}
+			}
+			peer.LastHandshakeTime += HandshakeTime(time.Duration(n) * time.Second)
+		case "last_handshake_time_nsec":
+			if peer == nil {
+				continue
+			}
+			n, err := strconv.ParseInt(val, 10, 64)
+			if err != nil {
+				return nil, &ParseError{l18n.Sprintf("Invalid key: %v", err), val}
+			}
+			peer.LastHandshakeTime += HandshakeTime(time.Duration(n))
+		case "protocol_version", "fwmark", "replace_peers", "replace_allowed_ips":
+		default:
 		}
-		conf.Peers = append(conf.Peers, peer)
 	}
-	return &conf
+	maybeAdd()
+	return &conf, nil
 }

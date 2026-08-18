@@ -71,7 +71,7 @@ type ConfView struct {
 	*walk.ScrollView
 	name            *walk.GroupBox
 	interfaze       *interfaceView
-	peers           map[conf.Key]*peerView
+	peers           map[conf.PublicKey]*peerView
 	tunnelChangedCB *manager.TunnelChangeCallback
 	tunnel          *manager.Tunnel
 	updateTicker    *time.Ticker
@@ -541,7 +541,7 @@ func NewConfView(parent walk.Container) (*ConfView, error) {
 		return nil, err
 	}
 	cv.interfaze.toggleActive.button.Clicked().Attach(cv.onToggleActiveClicked)
-	cv.peers = make(map[conf.Key]*peerView)
+	cv.peers = make(map[conf.PublicKey]*peerView)
 	cv.tunnelChangedCB = manager.IPCClientRegisterTunnelChange(cv.onTunnelChanged)
 	cv.SetTunnel(nil)
 	globalState, err := manager.IPCClientGlobalState()
@@ -698,7 +698,7 @@ func (cv *ConfView) setTunnel(tunnel *manager.Tunnel, config *conf.Config, state
 			if pv == nil {
 				pv = all[0]
 				all = all[1:]
-				k, e := conf.NewPrivateKeyFromString(pv.publicKey.text.Text())
+				k, e := conf.NewPublicKeyFromString(pv.publicKey.text.Text())
 				if e != nil {
 					continue
 				}
@@ -726,7 +726,7 @@ func (cv *ConfView) setTunnel(tunnel *manager.Tunnel, config *conf.Config, state
 		if !remove {
 			continue
 		}
-		k, e := conf.NewPrivateKeyFromString(pv.publicKey.text.Text())
+		k, e := conf.NewPublicKeyFromString(pv.publicKey.text.Text())
 		if e != nil {
 			continue
 		}

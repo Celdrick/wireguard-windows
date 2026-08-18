@@ -12,13 +12,17 @@ C:\Projects\wireguard-windows> build
 
 ### Running
 
-After you've built the application, run `amd64\wireguard.exe` or `x86\wireguard.exe` to install the manager service and show the UI.
+After you've built the application, run `amd64\wireguard.exe` together with
+the matching `amd64\wintun.dll` (keep them in the same directory) to install
+the manager service and show the UI.
 
 ```text
 C:\Projects\wireguard-windows> amd64\wireguard.exe
 ```
 
-Since WireGuard requires a driver to be installed, and this generally requires a valid Microsoft signature, you may benefit from first installing a release of WireGuard for Windows from the official [wireguard.com](https://www.wireguard.com/install/) builds, which bundles a Microsoft-signed driver, and then subsequently run your own wireguard.exe. Alternatively, you can craft your own installer using the `quickinstall.bat` script.
+WireGuard-GM uses userspace cryptography (SM2/SM3/SM4-GCM) and the Wintun
+adapter driver. Wintun is Microsoft-signed; copy `wintun.dll` next to
+`wireguard.exe`. This build does **not** install or use WireGuardNT.
 
 ### Optional: Localizing
 
@@ -68,12 +72,12 @@ After, run the above `build` commands as usual, from a shell that has [`signtool
 
 ### Alternative: Building from Linux
 
-You must first have Mingw and ImageMagick installed.
+You must first have Mingw and ImageMagick installed, plus sibling checkouts of
+`wireguard-go` (GM) and `gmsm`:
 
 ```text
 $ sudo apt install mingw-w64 imagemagick
-$ git clone https://git.zx2c4.com/wireguard-windows
-$ cd wireguard-windows
+$ ls ../wireguard-go ../gmsm
 $ make
 ```
 
@@ -83,16 +87,7 @@ You can deploy the 64-bit build to an SSH host specified by the `DEPLOYMENT_HOST
 $ make deploy
 ```
 
-### [`wg(8)`](https://git.zx2c4.com/wireguard-tools/about/src/man/wg.8) Support for Windows
-
-The command line utility [`wg(8)`](https://git.zx2c4.com/wireguard-tools/about/src/man/wg.8) works well on Windows. Being a Unix-centric project, it compiles with a Makefile and MingW:
-
-```text
-$ git clone https://git.zx2c4.com/wireguard-tools
-$ PLATFORM=windows make -C wireguard-tools/src
-$ stat wireguard-tools/src/wg.exe
-```
-
-It interacts with WireGuard instances run by the main WireGuard for Windows program.
+Use `wg-gm` from the wireguard-go tree to talk to a running tunnel's UAPI named
+pipe. Standard `wg(8)` expects base64 Curve25519 keys and will not work.
 
 When building on Windows, the aforementioned `build.bat` script takes care of building this.

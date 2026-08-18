@@ -7,13 +7,7 @@ package conf
 
 import (
 	"fmt"
-	"net/netip"
 	"strings"
-	"unsafe"
-
-	"golang.org/x/sys/windows"
-	"golang.zx2c4.com/wireguard/windows/driver"
-	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
 func (conf *Config) ToWgQuick() string {
@@ -97,50 +91,30 @@ func (conf *Config) ToWgQuick() string {
 	return output.String()
 }
 
-func (config *Config) ToDriverConfiguration() (*driver.Interface, uint32) {
-	preallocation := unsafe.Sizeof(driver.Interface{}) + uintptr(len(config.Peers))*unsafe.Sizeof(driver.Peer{})
-	for i := range config.Peers {
-		preallocation += uintptr(len(config.Peers[i].AllowedIPs)) * unsafe.Sizeof(driver.AllowedIP{})
+func (conf *Config) ToUAPI() string {
+	var output strings.Builder
+	output.WriteString(fmt.Sprintf("private_key=%s\n", conf.Interface.PrivateKey.String()))
+	if conf.Interface.ListenPort > 0 {
+		output.WriteString(fmt.Sprintf("listen_port=%d\n", conf.Interface.ListenPort))
 	}
-	var c driver.ConfigBuilder
-	c.Preallocate(uint32(preallocation))
-	c.AppendInterface(&driver.Interface{
-		Flags:      driver.InterfaceHasPrivateKey | driver.InterfaceHasListenPort,
-		ListenPort: config.Interface.ListenPort,
-		PrivateKey: config.Interface.PrivateKey,
-		PeerCount:  uint32(len(config.Peers)),
-	})
-	for i := range config.Peers {
-		flags := driver.PeerHasPublicKey | driver.PeerHasPersistentKeepalive
-		if !config.Peers[i].PresharedKey.IsZero() {
-			flags |= driver.PeerHasPresharedKey
+	if len(conf.Peers) > 0 {
+		output.WriteString("replace_peers=true\n")
+	}
+	for _, peer := range conf.Peers {
+		output.WriteString(fmt.Sprintf("public_key=%s\n", peer.PublicKey.String()))
+		if !peer.PresharedKey.IsZero() {
+			output.WriteString(fmt.Sprintf("preshared_key=%s\n", peer.PresharedKey.String()))
 		}
-		var endpoint winipcfg.RawSockaddrInet
-		if !config.Peers[i].Endpoint.IsEmpty() {
-			addr, err := netip.ParseAddr(config.Peers[i].Endpoint.Host)
-			if err == nil {
-				flags |= driver.PeerHasEndpoint
-				endpoint.SetAddrPort(netip.AddrPortFrom(addr, config.Peers[i].Endpoint.Port))
+		if !peer.Endpoint.IsEmpty() {
+			output.WriteString(fmt.Sprintf("endpoint=%s\n", peer.Endpoint.String()))
+		}
+		output.WriteString(fmt.Sprintf("persistent_keepalive_interval=%d\n", peer.PersistentKeepalive))
+		if len(peer.AllowedIPs) > 0 {
+			output.WriteString("replace_allowed_ips=true\n")
+			for _, address := range peer.AllowedIPs {
+				output.WriteString(fmt.Sprintf("allowed_ip=%s\n", address.String()))
 			}
 		}
-		c.AppendPeer(&driver.Peer{
-			Flags:               flags,
-			PublicKey:           config.Peers[i].PublicKey,
-			PresharedKey:        config.Peers[i].PresharedKey,
-			PersistentKeepalive: config.Peers[i].PersistentKeepalive,
-			Endpoint:            endpoint,
-			AllowedIPsCount:     uint32(len(config.Peers[i].AllowedIPs)),
-		})
-		for j := range config.Peers[i].AllowedIPs {
-			a := &driver.AllowedIP{Cidr: uint8(config.Peers[i].AllowedIPs[j].Bits())}
-			copy(a.Address[:], config.Peers[i].AllowedIPs[j].Addr().AsSlice())
-			if config.Peers[i].AllowedIPs[j].Addr().Is4() {
-				a.AddressFamily = windows.AF_INET
-			} else if config.Peers[i].AllowedIPs[j].Addr().Is6() {
-				a.AddressFamily = windows.AF_INET6
-			}
-			c.AppendAllowedIP(a)
-		}
 	}
-	return c.Interface()
+	return output.String()
 }

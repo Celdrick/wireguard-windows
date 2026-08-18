@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"runtime"
 	"time"
@@ -16,12 +17,16 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
+	"golang.zx2c4.com/wireguard/conn"
+	"golang.zx2c4.com/wireguard/device"
+	"golang.zx2c4.com/wireguard/ipc"
+	"golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/windows/conf"
-	"golang.zx2c4.com/wireguard/windows/driver"
 	"golang.zx2c4.com/wireguard/windows/elevate"
 	"golang.zx2c4.com/wireguard/windows/ringlogger"
 	"golang.zx2c4.com/wireguard/windows/services"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+	"golang.zx2c4.com/wireguard/windows/version"
 )
 
 type tunnelService struct {
@@ -32,9 +37,10 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 	serviceState := svc.StartPending
 	changes <- svc.Status{State: serviceState}
 
+	var dev *device.Device
+	var uapi net.Listener
 	var watcher *interfaceWatcher
-	var adapter *driver.Adapter
-	var luid winipcfg.LUID
+	var nativeTun *tun.NativeTun
 	var config *conf.Config
 	var err error
 	serviceError := services.ErrorSuccess
@@ -80,16 +86,19 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 			}
 		}()
 
-		if logErr == nil && adapter != nil && config != nil {
+		if logErr == nil && dev != nil && config != nil {
 			logErr = runScriptCommand(config.Interface.PreDown, config.Name)
 		}
 		if watcher != nil {
 			watcher.Destroy()
 		}
-		if adapter != nil {
-			adapter.Close()
+		if uapi != nil {
+			uapi.Close()
 		}
-		if logErr == nil && adapter != nil && config != nil {
+		if dev != nil {
+			dev.Close()
+		}
+		if logErr == nil && dev != nil && config != nil {
 			_ = runScriptCommand(config.Interface.PostDown, config.Name)
 		}
 		stopIt <- true
@@ -118,11 +127,12 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 	log.SetPrefix(fmt.Sprintf("[%s] ", config.Name))
 
 	services.PrintStarting()
+	log.Println("Starting", version.UserAgent())
 
 	if services.StartedAtBoot() {
 		if m, err := mgr.Connect(); err == nil {
 			if lockStatus, err := m.LockStatus(); err == nil && lockStatus.IsLocked {
-				/* If we don't do this, then the driver installation will block forever, because
+				/* If we don't do this, then Wintun installation will block forever, because
 				 * installing a network adapter starts the driver service too. Apparently at boot time,
 				 * Windows 8.1 locks the SCM for each service start, creating a deadlock if we don't
 				 * announce that we're running before starting additional services.
@@ -150,14 +160,21 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 		serviceError = services.ErrorDNSLookup
 		return
 	}
+	uapiConf := config.ToUAPI()
 
-	log.Println("Creating network adapter")
+	log.Println("Creating Wintun adapter")
+	tun.WintunTunnelType = "WireGuard-GM"
+	mtu := 0
+	if config.Interface.MTU > 0 {
+		mtu = int(config.Interface.MTU)
+	}
+	var wintun tun.Device
 	for i := range 15 {
 		if i > 0 {
 			time.Sleep(time.Second)
 			log.Printf("Retrying adapter creation after failure because system just booted (T+%v): %v", windows.DurationSinceBoot(), err)
 		}
-		adapter, err = driver.CreateAdapter(config.Name, "WireGuard", deterministicGUID(config))
+		wintun, err = tun.CreateTUNWithRequestedGUID(config.Name, deterministicGUID(config), mtu)
 		if err == nil || !services.StartedAtBoot() {
 			break
 		}
@@ -167,18 +184,12 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 		serviceError = services.ErrorCreateNetworkAdapter
 		return
 	}
-	luid = adapter.LUID()
-	driverVersion, err := driver.RunningVersion()
-	if err != nil {
-		log.Printf("Warning: unable to determine driver version: %v", err)
+	nativeTun = wintun.(*tun.NativeTun)
+	wintunVersion, verr := nativeTun.RunningVersion()
+	if verr != nil {
+		log.Printf("Warning: unable to determine Wintun version: %v", verr)
 	} else {
-		log.Printf("Using WireGuardNT/%d.%d", (driverVersion>>16)&0xffff, driverVersion&0xffff)
-	}
-	err = adapter.SetLogging(driver.AdapterLogOn)
-	if err != nil {
-		err = fmt.Errorf("Error enabling adapter logging: %w", err)
-		serviceError = services.ErrorCreateNetworkAdapter
-		return
+		log.Printf("Using Wintun/%d.%d (WireGuard-GM userspace SM2/SM3/SM4)", (wintunVersion>>16)&0xffff, wintunVersion&0xffff)
 	}
 
 	err = runScriptCommand(config.Interface.PreUp, config.Name)
@@ -187,6 +198,7 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 		return
 	}
 
+	luid := winipcfg.LUID(nativeTun.LUID())
 	err = enableFirewall(config, luid)
 	if err != nil {
 		serviceError = services.ErrorFirewall
@@ -200,18 +212,46 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 		return
 	}
 
+	log.Println("Creating interface instance")
+	logger := &device.Logger{Verbosef: log.Printf, Errorf: log.Printf}
+	bind := conn.NewDefaultBind()
+	dev = device.NewDevice(wintun, bind, logger)
+
 	log.Println("Setting interface configuration")
-	err = adapter.SetConfiguration(config.ToDriverConfiguration())
+	uapi, err = ipc.UAPIListen(config.Name)
+	if err != nil {
+		serviceError = services.ErrorUAPIListen
+		return
+	}
+	err = dev.IpcSet(uapiConf)
 	if err != nil {
 		serviceError = services.ErrorDeviceSetConfig
 		return
 	}
-	err = adapter.SetAdapterState(driver.AdapterStateUp)
+
+	log.Println("Bringing peers up")
+	err = dev.Up()
 	if err != nil {
 		serviceError = services.ErrorDeviceBringUp
 		return
 	}
-	watcher.Configure(adapter, config, luid)
+
+	var binder conn.BindSocketToInterface
+	if b, ok := bind.(conn.BindSocketToInterface); ok {
+		binder = b
+	}
+	watcher.Configure(binder, config, nativeTun)
+
+	log.Println("Listening for UAPI requests")
+	go func() {
+		for {
+			conn, err := uapi.Accept()
+			if err != nil {
+				return
+			}
+			go dev.IpcHandle(conn)
+		}
+	}()
 
 	err = runScriptCommand(config.Interface.PostUp, config.Name)
 	if err != nil {
@@ -240,6 +280,8 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 				log.Println("Startup complete")
 				started = true
 			}
+		case <-dev.Wait():
+			return
 		case e := <-watcher.errors:
 			serviceError, err = e.serviceError, e.err
 			return

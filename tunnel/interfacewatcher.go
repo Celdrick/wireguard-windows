@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  *
  * Copyright (C) 2019-2026 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2021 Mozilla Foundation. All Rights Reserved.
  */
 
 package tunnel
@@ -13,8 +14,9 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
+	"golang.zx2c4.com/wireguard/conn"
+	"golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/windows/conf"
-	"golang.zx2c4.com/wireguard/windows/driver"
 	"golang.zx2c4.com/wireguard/windows/services"
 	"golang.zx2c4.com/wireguard/windows/tunnel/firewall"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
@@ -34,9 +36,10 @@ type interfaceWatcher struct {
 	errors  chan interfaceWatcherError
 	started chan winipcfg.AddressFamily
 
-	conf    *conf.Config
-	adapter *driver.Adapter
-	luid    winipcfg.LUID
+	binder conn.BindSocketToInterface
+	conf   *conf.Config
+	tun    *tun.NativeTun
+	luid   winipcfg.LUID
 
 	setupMutex              sync.Mutex
 	interfaceChangeCallback winipcfg.ChangeCallback
@@ -67,13 +70,25 @@ func (iw *interfaceWatcher) setup(family winipcfg.AddressFamily) {
 	}
 	var err error
 
+	if iw.binder != nil {
+		var bindCallbacks []winipcfg.ChangeCallback
+		bindCallbacks, err = monitorDefaultRoute(family, iw.binder, iw.luid)
+		if err != nil {
+			iw.errors <- interfaceWatcherError{services.ErrorBindSocketsToDefaultRoutes, err}
+			return
+		}
+		*changeCallbacks = append(*changeCallbacks, bindCallbacks...)
+	}
+
 	if iw.conf.Interface.MTU == 0 {
 		log.Printf("Monitoring MTU of default %s routes", ipversion)
-		*changeCallbacks, err = monitorMTU(family, iw.luid)
+		var mtuCallbacks []winipcfg.ChangeCallback
+		mtuCallbacks, err = monitorMTU(family, iw.luid)
 		if err != nil {
 			iw.errors <- interfaceWatcherError{services.ErrorMonitorMTUChanges, err}
 			return
 		}
+		*changeCallbacks = append(*changeCallbacks, mtuCallbacks...)
 	}
 
 	log.Printf("Setting device %s addresses", ipversion)
@@ -112,18 +127,6 @@ func watchInterface() (*interfaceWatcher, error) {
 			return
 		}
 		iw.setup(iface.Family)
-
-		if state, err := iw.adapter.AdapterState(); err == nil && state == driver.AdapterStateDown {
-			log.Println("Reinitializing adapter configuration")
-			err = iw.adapter.SetConfiguration(iw.conf.ToDriverConfiguration())
-			if err != nil {
-				log.Println(fmt.Errorf("%v: %w", services.ErrorDeviceSetConfig, err))
-			}
-			err = iw.adapter.SetAdapterState(driver.AdapterStateUp)
-			if err != nil {
-				log.Println(fmt.Errorf("%v: %w", services.ErrorDeviceBringUp, err))
-			}
-		}
 	})
 	if err != nil {
 		return nil, fmt.Errorf("unable to register interface change callback: %w", err)
@@ -131,14 +134,15 @@ func watchInterface() (*interfaceWatcher, error) {
 	return iw, nil
 }
 
-func (iw *interfaceWatcher) Configure(adapter *driver.Adapter, conf *conf.Config, luid winipcfg.LUID) {
+func (iw *interfaceWatcher) Configure(binder conn.BindSocketToInterface, conf *conf.Config, nativeTun *tun.NativeTun) {
 	iw.setupMutex.Lock()
 	defer iw.setupMutex.Unlock()
 	iw.watchdog.Reset(time.Minute)
 
-	iw.adapter, iw.conf, iw.luid = adapter, conf, luid
+	iw.binder, iw.conf, iw.tun = binder, conf, nativeTun
+	iw.luid = winipcfg.LUID(nativeTun.LUID())
 	for _, event := range iw.storedEvents {
-		if event.luid == luid {
+		if event.luid == iw.luid {
 			iw.setup(event.family)
 		}
 	}
@@ -177,8 +181,6 @@ func (iw *interfaceWatcher) Destroy() {
 		changeCallbacks6 = changeCallbacks6[1:]
 	}
 	if luid != 0 && iw.luid == luid {
-		// It seems that the Windows networking stack doesn't like it when we destroy interfaces that have active
-		// routes, so to be certain, just remove everything before destroying.
 		luid.FlushRoutes(windows.AF_INET)
 		luid.FlushIPAddresses(windows.AF_INET)
 		luid.FlushDNS(windows.AF_INET)

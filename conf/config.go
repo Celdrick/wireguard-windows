@@ -6,21 +6,24 @@
 package conf
 
 import (
-	"crypto/rand"
 	"crypto/subtle"
-	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"net/netip"
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/curve25519"
+	wgcrypto "golang.zx2c4.com/wireguard/device/crypto"
 
 	"golang.zx2c4.com/wireguard/windows/l18n"
 )
 
-const KeyLength = 32
+const (
+	PrivateKeyLength   = wgcrypto.PrivateKeySize
+	PublicKeyLength    = wgcrypto.PublicKeySize
+	PresharedKeyLength = wgcrypto.PresharedKeySize
+)
 
 type Endpoint struct {
 	Host string
@@ -28,7 +31,9 @@ type Endpoint struct {
 }
 
 type (
-	Key           [KeyLength]byte
+	PrivateKey    [PrivateKeyLength]byte
+	PublicKey     [PublicKeyLength]byte
+	PresharedKey  [PresharedKeyLength]byte
 	HandshakeTime time.Duration
 	Bytes         uint64
 )
@@ -42,7 +47,7 @@ type Config struct {
 }
 
 type Interface struct {
-	PrivateKey Key
+	PrivateKey PrivateKey
 	Addresses  []netip.Prefix
 	ListenPort uint16
 	MTU        uint16
@@ -58,8 +63,8 @@ type Interface struct {
 }
 
 type Peer struct {
-	PublicKey           Key
-	PresharedKey        Key
+	PublicKey           PublicKey
+	PresharedKey        PresharedKey
 	AllowedIPs          []netip.Prefix
 	Endpoint            Endpoint
 	PersistentKeepalive uint16
@@ -121,42 +126,64 @@ func (e *Endpoint) IsEmpty() bool {
 	return len(e.Host) == 0
 }
 
-func (k *Key) String() string {
-	return base64.StdEncoding.EncodeToString(k[:])
+func (k *PrivateKey) String() string {
+	return hex.EncodeToString(k[:])
 }
 
-func (k *Key) IsZero() bool {
-	var zeros Key
+func (k *PrivateKey) IsZero() bool {
+	var zeros PrivateKey
 	return subtle.ConstantTimeCompare(zeros[:], k[:]) == 1
 }
 
-func (k *Key) Public() *Key {
-	var p [KeyLength]byte
-	curve25519.ScalarBaseMult(&p, (*[KeyLength]byte)(k))
-	return (*Key)(&p)
+func (k *PrivateKey) Public() *PublicKey {
+	sk := wgcrypto.PrivateKey(*k)
+	pk, err := sk.PublicKey()
+	if err != nil {
+		return &PublicKey{}
+	}
+	return (*PublicKey)(&pk)
 }
 
-func NewPresharedKey() (*Key, error) {
-	var k [KeyLength]byte
-	_, err := rand.Read(k[:])
+func (k *PublicKey) String() string {
+	return hex.EncodeToString(k[:])
+}
+
+func (k *PublicKey) IsZero() bool {
+	var zeros PublicKey
+	return subtle.ConstantTimeCompare(zeros[:], k[:]) == 1
+}
+
+func (k *PresharedKey) String() string {
+	return hex.EncodeToString(k[:])
+}
+
+func (k *PresharedKey) IsZero() bool {
+	var zeros PresharedKey
+	return subtle.ConstantTimeCompare(zeros[:], k[:]) == 1
+}
+
+func NewPresharedKey() (*PresharedKey, error) {
+	var k PresharedKey
+	if _, err := wgcrypto.ReadRandom(k[:]); err != nil {
+		return nil, err
+	}
+	return &k, nil
+}
+
+func NewPrivateKey() (*PrivateKey, error) {
+	sk, err := wgcrypto.NewPrivateKey()
 	if err != nil {
 		return nil, err
 	}
-	return (*Key)(&k), nil
+	return (*PrivateKey)(&sk), nil
 }
 
-func NewPrivateKey() (*Key, error) {
-	k, err := NewPresharedKey()
-	if err != nil {
-		return nil, err
-	}
-	k[0] &= 248
-	k[31] = (k[31] & 127) | 64
-	return k, nil
+func NewPrivateKeyFromString(h string) (*PrivateKey, error) {
+	return parsePrivateKeyHex(h)
 }
 
-func NewPrivateKeyFromString(b64 string) (*Key, error) {
-	return parseKeyBase64(b64)
+func NewPublicKeyFromString(h string) (*PublicKey, error) {
+	return parsePublicKeyHex(h)
 }
 
 func (t HandshakeTime) IsEmpty() bool {
@@ -258,16 +285,16 @@ func (conf *Config) DeduplicateNetworkEntries() {
 }
 
 func (conf *Config) Redact() {
-	conf.Interface.PrivateKey = Key{}
+	conf.Interface.PrivateKey = PrivateKey{}
 	conf.Interface.PreUp = ""
 	conf.Interface.PostUp = ""
 	conf.Interface.PreDown = ""
 	conf.Interface.PostDown = ""
 	conf.Interface.Comments = SectionComments{}
 	for i := range conf.Peers {
-		conf.Peers[i].PublicKey = Key{}
+		conf.Peers[i].PublicKey = PublicKey{}
 		binary.LittleEndian.PutUint64(conf.Peers[i].PublicKey[:8], uint64(i))
-		conf.Peers[i].PresharedKey = Key{}
+		conf.Peers[i].PresharedKey = PresharedKey{}
 		conf.Peers[i].Comments = SectionComments{}
 	}
 	conf.TrailingComments = nil
