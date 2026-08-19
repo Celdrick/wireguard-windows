@@ -79,6 +79,16 @@ build_one() {
 		go build -trimpath -ldflags "-H windowsgui -s -w" -buildvcs=false \
 		-o "$out/wireguard.exe" ./
 
+	# resources_<arch>.syso committed in-tree embeds the manifest (lxn/walk
+	# requires the Common Controls v6 dependency) plus icons and version info.
+	# Without it the UI process starts, fails window creation, and silently
+	# retries forever. Fail the build here rather than shipping a broken exe.
+	if ! grep -aq Common-Controls "$out/wireguard.exe"; then
+		echo "ERROR: $out/wireguard.exe has no embedded manifest" >&2
+		echo "       expected resources_${arch}.syso in the repo root to be linked automatically" >&2
+		exit 1
+	fi
+
 	local wt_arch
 	wt_arch="$(wintun_dir "$arch")"
 	cp "$ROOT/.deps/wintun/bin/${wt_arch}/wintun.dll" "$out/wintun.dll"

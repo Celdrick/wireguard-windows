@@ -14,5 +14,8 @@
 *.swp
 *.bak
 *.syso
+!resources_*.syso
 .idea
 *.ico
+# Added by code-review-graph
+.code-review-graph/
