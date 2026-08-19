@@ -128,12 +128,18 @@ jobs:
           files=(dist/*.tar.gz)
           if (( ${#files[@]} == 0 )); then
             echo "No release tarballs found" >&2
+            ls -laR dist >&2 || true
             exit 1
           fi
           for archive in "${files[@]}"; do
-            echo "Checking $archive"
-            tar -tzf "$archive" | grep -qx wireguard.exe
-            tar -tzf "$archive" | grep -qx wintun.dll
+            echo "Checking $archive ($(stat -c%s "$archive") bytes)"
+            if ! entries=$(tar -tzf "$archive"); then
+              echo "!! tar listing failed for $archive" >&2
+              file "$archive" >&2 || true
+              exit 2
+            fi
+            echo "$entries" | grep -qx wireguard.exe || { echo "!! wireguard.exe missing from $archive" >&2; echo "$entries" >&2; exit 1; }
+            echo "$entries" | grep -qx wintun.dll || { echo "!! wintun.dll missing from $archive" >&2; echo "$entries" >&2; exit 1; }
           done
 
       - name: Publish GitHub Release
